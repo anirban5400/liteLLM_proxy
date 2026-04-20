@@ -2,6 +2,8 @@
 
 OpenAI-compatible LiteLLM gateway with PostgreSQL persistence, env-driven model configuration, and a production deployment path for a DigitalOcean Droplet. Local mode binds LiteLLM to `127.0.0.1`; production mode puts Caddy in front for automatic HTTPS.
 
+For a full Droplet walkthrough, see [DIGITALOCEAN_DROPLET_DEPLOY.md](/Users/anirbanchoudhury/Documents/Projects/liteLLM_proxy/DIGITALOCEAN_DROPLET_DEPLOY.md).
+
 ## Deployment modes
 
 This repo now ships three compose layers:
