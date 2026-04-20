@@ -1,10 +1,17 @@
 name: litellm_proxy
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:16
     container_name: litellm_db
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - path: env/compose.defaults.env
         required: true
@@ -24,6 +31,7 @@ services:
     image: "${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.83.7-stable}"
     container_name: litellm
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       db:
         condition: service_healthy

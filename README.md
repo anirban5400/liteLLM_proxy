@@ -86,6 +86,7 @@ This launches:
 - `caddy` on public ports `80/443`
 
 Caddy terminates TLS and proxies traffic to LiteLLM. Certificate issuance can take a short time on first boot, and it requires DNS to be correct.
+Production startup now refuses to run if `.env` still contains placeholder values like `llm.example.com`, `sk-litellm-change-me`, or the sample Postgres password.
 
 ### 4. Verify the deployment
 
@@ -143,6 +144,8 @@ Equivalent `make` targets exist for each command.
 
 - The base compose file does not expose LiteLLM directly; only the local override or production reverse proxy publishes ports.
 - Named Docker volumes keep PostgreSQL data and Caddy certificate state between restarts.
+- Docker logs are capped with rotation to reduce disk growth on small Droplets.
+- The Caddy container only receives `PUBLIC_DOMAIN`; upstream API keys and DB credentials stay scoped to the services that need them.
 - `remove` and `remove-prod` keep volumes.
 - `remove-all` and `remove-all-prod` delete persistent data.
 

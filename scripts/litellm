@@ -70,6 +70,7 @@ ensure_prod_env() {
   load_env
 
   local missing=()
+  local placeholders=()
   local var
 
   for var in PUBLIC_DOMAIN LITELLM_MASTER_KEY POSTGRES_PASSWORD DATABASE_URL; do
@@ -80,6 +81,36 @@ ensure_prod_env() {
 
   if (( ${#missing[@]} > 0 )); then
     echo "Missing required production env vars in .env: ${missing[*]}" >&2
+    exit 1
+  fi
+
+  if [[ "${PUBLIC_DOMAIN:-}" == "llm.example.com" ]]; then
+    placeholders+=("PUBLIC_DOMAIN")
+  fi
+
+  if [[ "${LITELLM_MASTER_KEY:-}" == "sk-litellm-change-me" ]]; then
+    placeholders+=("LITELLM_MASTER_KEY")
+  fi
+
+  if [[ "${POSTGRES_PASSWORD:-}" == "litellm_local_dev" ]]; then
+    placeholders+=("POSTGRES_PASSWORD")
+  fi
+
+  if [[ "${POSTGRES_PASSWORD:-}" == "change-this-to-a-long-random-string" ]]; then
+    placeholders+=("POSTGRES_PASSWORD")
+  fi
+
+  if [[ "${DATABASE_URL:-}" == *"change-this-to-a-long-random-string"* ]]; then
+    placeholders+=("DATABASE_URL")
+  fi
+
+  if (( ${#placeholders[@]} > 0 )); then
+    echo "Replace placeholder production values in .env: ${placeholders[*]}" >&2
+    exit 1
+  fi
+
+  if [[ "${LITELLM_MASTER_KEY:-}" != sk-* ]]; then
+    echo "LITELLM_MASTER_KEY must start with sk-." >&2
     exit 1
   fi
 
@@ -161,10 +192,10 @@ status-prod)
   compose_cmd prod ps
   load_env
   if [[ -n "${PUBLIC_DOMAIN:-}" ]]; then
-    if curl -skf "https://${PUBLIC_DOMAIN}/health/liveliness" >/dev/null; then
+    if curl -fsS "https://${PUBLIC_DOMAIN}/health/liveliness" >/dev/null; then
       echo "health/liveliness: OK (https://${PUBLIC_DOMAIN})"
     else
-      echo "health/liveliness: not reachable on https://${PUBLIC_DOMAIN} (still starting, DNS pending, or TLS pending)" >&2
+      echo "health/liveliness: not reachable on https://${PUBLIC_DOMAIN} with valid TLS (still starting, DNS pending, cert pending, or certificate invalid)" >&2
     fi
   fi
   ;;
