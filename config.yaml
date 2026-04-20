@@ -1,0 +1,65 @@
+model_list:
+  - model_name: "os.environ/ALIAS_NAME_1"
+    litellm_params:
+      model: "os.environ/MODEL_NAME_1"
+      api_base: "os.environ/API_BASE_1"
+      api_key: "os.environ/API_KEY_1"
+  # - model_name: "os.environ/ALIAS_NAME_2"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_2"
+  #     api_base: "os.environ/API_BASE_2"
+  #     api_key: "os.environ/API_KEY_2"
+  # - model_name: "os.environ/ALIAS_NAME_3"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_3"
+  #     api_base: "os.environ/API_BASE_3"
+  #     api_key: "os.environ/API_KEY_3"
+  # - model_name: "os.environ/ALIAS_NAME_4"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_4"
+  #     api_base: "os.environ/API_BASE_4"
+  #     api_key: "os.environ/API_KEY_4"
+  # - model_name: "os.environ/ALIAS_NAME_5"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_5"
+  #     api_base: "os.environ/API_BASE_5"
+  #     api_key: "os.environ/API_KEY_5"
+  # - model_name: "os.environ/ALIAS_NAME_6"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_6"
+  #     api_base: "os.environ/API_BASE_6"
+  #     api_key: "os.environ/API_KEY_6"
+  # - model_name: "os.environ/ALIAS_NAME_7"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_7"
+  #     api_base: "os.environ/API_BASE_7"
+  #     api_key: "os.environ/API_KEY_7"
+  # - model_name: "os.environ/ALIAS_NAME_8"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_8"
+  #     api_base: "os.environ/API_BASE_8"
+  #     api_key: "os.environ/API_KEY_8"
+  # - model_name: "os.environ/ALIAS_NAME_9"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_9"
+  #     api_base: "os.environ/API_BASE_9"
+  #     api_key: "os.environ/API_KEY_9"
+  # - model_name: "os.environ/ALIAS_NAME_10"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_10"
+  #     api_base: "os.environ/API_BASE_10"
+  #     api_key: "os.environ/API_KEY_10"
+  # - model_name: "os.environ/ALIAS_NAME_11"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_11"
+  #     api_base: "os.environ/API_BASE_11"
+  #     api_key: "os.environ/API_KEY_11"
+  # - model_name: "os.environ/ALIAS_NAME_12"
+  #   litellm_params:
+  #     model: "os.environ/MODEL_NAME_12"
+  #     api_base: "os.environ/API_BASE_12"
+  #     api_key: "os.environ/API_KEY_12"
+
+general_settings:
+  master_key: "os.environ/LITELLM_MASTER_KEY"
+  database_url: "os.environ/DATABASE_URL"

@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+usage() {
+  echo "Usage: $(basename "$0") {start|stop|restart|status|remove|remove-all|logs|start-prod|stop-prod|restart-prod|status-prod|remove-prod|remove-all-prod|logs-prod}" >&2
+  echo "" >&2
+  echo "  start           Local mode on 127.0.0.1:\$LITELLM_PORT" >&2
+  echo "  stop            Stop local-mode containers" >&2
+  echo "  restart         Restart local-mode containers" >&2
+  echo "  status          Local compose ps + localhost health check" >&2
+  echo "  remove          docker compose down for local mode (keeps volumes)" >&2
+  echo "  remove-all      docker compose down -v for local mode" >&2
+  echo "  logs            Follow LiteLLM logs in local mode" >&2
+  echo "  start-prod      Production mode behind Caddy on 80/443" >&2
+  echo "  stop-prod       Stop production-mode containers" >&2
+  echo "  restart-prod    Restart production-mode containers" >&2
+  echo "  status-prod     Production compose ps + HTTPS health check" >&2
+  echo "  remove-prod     docker compose down for production mode (keeps volumes)" >&2
+  echo "  remove-all-prod docker compose down -v for production mode" >&2
+  echo "  logs-prod       Follow LiteLLM + Caddy logs in production mode" >&2
+  exit 1
+}
+
+host_port() {
+  set -a
+  # shellcheck source=/dev/null
+  source "$ROOT/env/compose.defaults.env"
+  [[ -f "$ROOT/.env" ]] && source "$ROOT/.env"
+  set +a
+  echo "${LITELLM_PORT:-4000}"
+}
+
+load_env() {
+  set -a
+  # shellcheck source=/dev/null
+  source "$ROOT/env/compose.defaults.env"
+  [[ -f "$ROOT/.env" ]] && source "$ROOT/.env"
+  set +a
+}
+
+compose_cmd() {
+  local mode="$1"
+  shift
+
+  local files=(
+    -f "$ROOT/docker-compose.yml"
+  )
+
+  if [[ "$mode" == "prod" ]]; then
+    files+=(-f "$ROOT/docker-compose.prod.yml")
+  else
+    files+=(-f "$ROOT/docker-compose.local.yml")
+  fi
+
+  docker compose "${files[@]}" "$@"
+}
+
+ensure_env_file() {
+  if [[ ! -f "$ROOT/.env" ]]; then
+    echo "Missing .env. Copy .env.example to .env and fill in production values first." >&2
+    exit 1
+  fi
+}
+
+ensure_prod_env() {
+  ensure_env_file
+  load_env
+
+  local missing=()
+  local var
+
+  for var in PUBLIC_DOMAIN LITELLM_MASTER_KEY POSTGRES_PASSWORD DATABASE_URL; do
+    if [[ -z "${!var:-}" ]]; then
+      missing+=("$var")
+    fi
+  done
+
+  if (( ${#missing[@]} > 0 )); then
+    echo "Missing required production env vars in .env: ${missing[*]}" >&2
+    exit 1
+  fi
+
+  if [[ "${POSTGRES_PASSWORD:-}" == "litellm_local_dev" ]]; then
+    echo "POSTGRES_PASSWORD is still the local default. Set a strong production password in .env." >&2
+    exit 1
+  fi
+}
+
+remove_with_confirmation() {
+  local mode="$1"
+  local with_volumes="$2"
+  local description="$3"
+
+  if [[ "$with_volumes" == "yes" ]]; then
+    echo "$description" >&2
+    if [[ "${LITELLM_FORCE_REMOVE_ALL:-}" != "yes" ]]; then
+      read -r -p "Type yes to continue: " ok
+      [[ "$ok" == "yes" ]] || exit 1
+    fi
+    compose_cmd "$mode" down -v
+  else
+    compose_cmd "$mode" down
+  fi
+}
+
+cmd="${1:-}"
+[[ -n "$cmd" ]] || usage
+
+case "$cmd" in
+start)
+  if [[ ! -f .env ]]; then
+    echo "No .env found — using env/compose.defaults.env only." >&2
+    echo "For real keys: cp .env.example .env  then edit (recommended)." >&2
+  fi
+  compose_cmd local up -d
+  echo "LiteLLM: http://localhost:$(host_port)"
+  ;;
+stop)
+  compose_cmd local stop
+  ;;
+restart)
+  compose_cmd local restart
+  ;;
+status)
+  compose_cmd local ps
+  if [[ "$(docker inspect -f '{{.State.Running}}' litellm 2>/dev/null || echo false)" == "true" ]]; then
+    hp="$(host_port)"
+    if curl -sf "http://127.0.0.1:${hp}/health/liveliness" >/dev/null; then
+      echo "health/liveliness: OK (http://127.0.0.1:${hp})"
+    else
+      echo "health/liveliness: not reachable on port ${hp} (still starting?)" >&2
+    fi
+  fi
+  ;;
+remove)
+  remove_with_confirmation local no ""
+  ;;
+remove-all)
+  remove_with_confirmation local yes "This deletes the Postgres volume litellm_proxy_pgdata (virtual keys, all proxy DB data)."
+  ;;
+logs)
+  compose_cmd local logs -f --tail=200 litellm
+  ;;
+start-prod)
+  ensure_prod_env
+  compose_cmd prod up -d
+  load_env
+  echo "LiteLLM: https://${PUBLIC_DOMAIN}"
+  ;;
+stop-prod)
+  compose_cmd prod stop
+  ;;
+restart-prod)
+  ensure_prod_env
+  compose_cmd prod restart
+  ;;
+status-prod)
+  compose_cmd prod ps
+  load_env
+  if [[ -n "${PUBLIC_DOMAIN:-}" ]]; then
+    if curl -skf "https://${PUBLIC_DOMAIN}/health/liveliness" >/dev/null; then
+      echo "health/liveliness: OK (https://${PUBLIC_DOMAIN})"
+    else
+      echo "health/liveliness: not reachable on https://${PUBLIC_DOMAIN} (still starting, DNS pending, or TLS pending)" >&2
+    fi
+  fi
+  ;;
+remove-prod)
+  remove_with_confirmation prod no ""
+  ;;
+remove-all-prod)
+  remove_with_confirmation prod yes "This deletes the Postgres volume and Caddy state volumes for the production deployment."
+  ;;
+logs-prod)
+  compose_cmd prod logs -f --tail=200 litellm caddy
+  ;;
+*)
+  usage
+  ;;
+esac

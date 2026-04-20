@@ -1,0 +1,4 @@
+services:
+  litellm:
+    ports:
+      - "${LITELLM_BIND_ADDRESS:-127.0.0.1}:${LITELLM_PORT:-4000}:4000"

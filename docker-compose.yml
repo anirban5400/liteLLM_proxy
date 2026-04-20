@@ -1,0 +1,60 @@
+name: litellm_proxy
+
+services:
+  db:
+    image: postgres:16
+    container_name: litellm_db
+    restart: unless-stopped
+    env_file:
+      - path: env/compose.defaults.env
+        required: true
+      - path: .env
+        required: false
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $$POSTGRES_DB -U $$POSTGRES_USER"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  litellm:
+    image: "${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.83.7-stable}"
+    container_name: litellm
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: env/compose.defaults.env
+        required: true
+      - path: .env
+        required: false
+    expose:
+      - "4000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    networks:
+      - internal
+    command:
+      - "--config=/app/config.yaml"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  postgres_data:
+    name: litellm_proxy_pgdata
+
+networks:
+  internal:
+    driver: bridge
