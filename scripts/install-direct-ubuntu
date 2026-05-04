@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SERVICE_NAME="litellm"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+CADDYFILE="/etc/caddy/Caddyfile"
+PYTHON_BIN="${APP_DIR}/.venv/bin/python"
+PIP_BIN="${APP_DIR}/.venv/bin/pip"
+LITELLM_BIN="${APP_DIR}/.venv/bin/litellm"
+LITELLM_VERSION="${LITELLM_VERSION:-1.83.7}"
+DOMAIN=""
+ADMIN_KEY=""
+DB_PASSWORD=""
+FORCE_ENV="no"
+SKIP_UFW="no"
+
+log() {
+  printf '[install-direct] %s\n' "$*"
+}
+
+die() {
+  printf '[install-direct] ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  sudo ./scripts/install-direct-ubuntu [options]
+
+Options:
+  --domain DOMAIN          Public hostname for Caddy and HTTPS. Overrides PUBLIC_DOMAIN in .env.
+  --admin-key KEY          LiteLLM admin key. Must start with sk-. Generated if omitted.
+  --db-password PASSWORD   PostgreSQL password. Generated if omitted.
+  --force-env              Rewrite .env from .env.example and generated values.
+  --skip-ufw               Do not configure ufw firewall rules.
+  -h, --help               Show this help.
+
+After the script finishes, edit .env and set API_KEY_1 and any provider model values.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --domain)
+      DOMAIN="${2:-}"
+      shift 2
+      ;;
+    --admin-key)
+      ADMIN_KEY="${2:-}"
+      shift 2
+      ;;
+    --db-password)
+      DB_PASSWORD="${2:-}"
+      shift 2
+      ;;
+    --force-env)
+      FORCE_ENV="yes"
+      shift
+      ;;
+    --skip-ufw)
+      SKIP_UFW="yes"
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ "$(id -u)" -eq 0 ]] || die "Run this script with sudo or as root."
+
+generate_secret() {
+  openssl rand -hex 32
+}
+
+escape_sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
+}
+
+escape_sql_literal() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+
+env_get() {
+  local key="$1"
+  local file="${APP_DIR}/.env"
+  [[ -f "$file" ]] || return 1
+  awk -F= -v key="$key" '
+    $0 !~ /^[[:space:]]*#/ && $1 == key {
+      sub(/^[^=]*=/, "")
+      print
+      exit
+    }
+  ' "$file"
+}
+
+env_set() {
+  local key="$1"
+  local value="$2"
+  local file="${APP_DIR}/.env"
+  local escaped
+  escaped="$(escape_sed_replacement "$value")"
+
+  if grep -Eq "^[[:space:]]*${key}=" "$file"; then
+    sed -i "s/^${key}=.*/${key}=${escaped}/" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$file"
+  fi
+}
+
+if [[ ! -f "${APP_DIR}/config.yaml" ]]; then
+  die "config.yaml not found. Run this from the cloned liteLLM_proxy repo."
+fi
+
+if [[ ! -f "${APP_DIR}/.env" || "$FORCE_ENV" == "yes" ]]; then
+  [[ -f "${APP_DIR}/.env.example" ]] || die ".env.example not found."
+  cp "${APP_DIR}/.env.example" "${APP_DIR}/.env"
+  chmod 600 "${APP_DIR}/.env"
+fi
+
+DOMAIN="${DOMAIN:-$(env_get PUBLIC_DOMAIN || true)}"
+[[ -n "$DOMAIN" ]] || die "Set PUBLIC_DOMAIN in .env or pass --domain your-domain.com."
+[[ "$DOMAIN" != "llm.example.com" ]] || die "Use your real domain, not llm.example.com."
+[[ "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "Domain contains unsupported characters."
+
+if [[ -n "$ADMIN_KEY" && "$ADMIN_KEY" != sk-* ]]; then
+  die "--admin-key must start with sk-."
+fi
+
+log "Installing OS packages."
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y ca-certificates curl git openssl sudo python3 python3-venv python3-pip postgresql postgresql-contrib caddy ufw
+
+ADMIN_KEY="${ADMIN_KEY:-$(env_get LITELLM_MASTER_KEY || true)}"
+if [[ -z "$ADMIN_KEY" || "$ADMIN_KEY" == "sk-litellm-change-me" ]]; then
+  ADMIN_KEY="sk-$(generate_secret)"
+fi
+
+DB_PASSWORD="${DB_PASSWORD:-$(env_get POSTGRES_PASSWORD || true)}"
+if [[ -z "$DB_PASSWORD" || "$DB_PASSWORD" == "litellm_local_dev" || "$DB_PASSWORD" == "change-this-to-a-long-random-string" ]]; then
+  DB_PASSWORD="$(generate_secret)"
+fi
+
+DATABASE_URL="postgresql://litellm:${DB_PASSWORD}@127.0.0.1:5432/litellm"
+
+log "Writing direct-host environment values to .env."
+env_set PUBLIC_DOMAIN "$DOMAIN"
+env_set POSTGRES_PASSWORD "$DB_PASSWORD"
+env_set DATABASE_URL "$DATABASE_URL"
+env_set LITELLM_MASTER_KEY "$ADMIN_KEY"
+chmod 600 "${APP_DIR}/.env"
+
+log "Creating Python virtual environment and installing LiteLLM."
+python3 -m venv "${APP_DIR}/.venv"
+"$PIP_BIN" install --upgrade pip
+"$PIP_BIN" install "litellm[proxy]==${LITELLM_VERSION}"
+
+log "Configuring PostgreSQL database and user."
+systemctl enable postgresql
+systemctl start postgresql
+DB_PASSWORD_SQL="$(escape_sql_literal "$DB_PASSWORD")"
+if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname = 'litellm'" | grep -q 1; then
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER ROLE litellm WITH LOGIN PASSWORD '${DB_PASSWORD_SQL}';"
+else
+  sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE litellm LOGIN PASSWORD '${DB_PASSWORD_SQL}';"
+fi
+
+if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = 'litellm'" | grep -q 1; then
+  sudo -u postgres createdb -O litellm litellm
+fi
+sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE litellm OWNER TO litellm;"
+
+log "Creating systemd service."
+cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=LiteLLM Proxy
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=${APP_DIR}
+EnvironmentFile=${APP_DIR}/.env
+ExecStart=${LITELLM_BIN} --config ${APP_DIR}/config.yaml --host 127.0.0.1 --port 4000 --detailed_debug
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable "$SERVICE_NAME"
+systemctl restart "$SERVICE_NAME"
+
+log "Configuring Caddy for HTTPS domain ${DOMAIN}."
+cat > "$CADDYFILE" <<EOF
+${DOMAIN} {
+  encode zstd gzip
+
+  reverse_proxy 127.0.0.1:4000
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+  }
+}
+EOF
+
+systemctl enable caddy
+systemctl reload caddy || systemctl restart caddy
+
+if [[ "$SKIP_UFW" != "yes" ]]; then
+  log "Configuring ufw firewall."
+  ufw allow OpenSSH
+  ufw allow 80/tcp
+  ufw allow 443/tcp
+  ufw --force enable
+fi
+
+log "Waiting briefly for LiteLLM to respond on localhost."
+for _ in {1..30}; do
+  if curl -fsS "http://127.0.0.1:4000/health/liveliness" >/dev/null; then
+    log "LiteLLM local health check passed."
+    break
+  fi
+  sleep 2
+done
+
+cat <<EOF
+
+Direct install complete.
+
+Domain:
+  https://${DOMAIN}
+
+Service commands:
+  systemctl status litellm
+  journalctl -u litellm -f
+  systemctl restart litellm
+
+Next required step:
+  Edit ${APP_DIR}/.env and set API_KEY_1, MODEL_NAME_1, API_BASE_1, and ALIAS_NAME_1.
+  Then run: systemctl restart litellm
+
+Admin key:
+  ${ADMIN_KEY}
+
+If HTTPS is not ready yet, check DNS points ${DOMAIN} to this droplet and run:
+  journalctl -u caddy -f
+EOF
